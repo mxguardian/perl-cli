@@ -36,13 +36,13 @@ Options:
 
 =cut
 
-my $help = 0;
+my $_help = 0;
 my $verbose = 0;
 GetOptions(
-    'help|?' => \$help,
+    'help|?' => \$_help,
     verbose => \$verbose
 ) or pod2usage(2);
-pod2usage(1) if $help;
+pod2usage(1) if $_help;
 
 my $command = shift;
 pod2usage("The following arguments are required: command") unless defined($command);
@@ -57,6 +57,12 @@ if ( $command eq 'search-inbound' ) {
     search('inbound');
 } elsif ( $command eq 'search-outbound' ) {
     search('outbound');
+} elsif ( $command eq 'list-users' ) {
+    list_users();
+} elsif ( $command eq 'add-user' ) {
+    add_user();
+} elsif ( $command eq 'remove-user' ) {
+    remove_user();
 } else {
     pod2usage("Unknown command: $command");
 }
@@ -125,10 +131,8 @@ sub search {
         );
     }
 
-    #@type MXG::API::Response;
     my $response = $client->request(path => $path, params => \%params );
-    die $response->status_line()."\n" unless $response->is_success();
-    print $response->status_line,"\n" if $verbose;
+    print $response->status() if $verbose;
 
     my @columns = split(',',$columns);
     for my $msg (@{$response->json()}) {
@@ -151,10 +155,146 @@ sub search {
     }
 }
 
+=head2 list-users
+
+mxg list-users [options]
+
+ Options:
+   --domain <value>
+   [--include-aliases]
+
+=cut
+
+sub list_users {
+    my $page = 1;
+    my $pagesize = 100;
+    my $help = 0;
+    my $include_aliases = 0;
+    my $domain;
+
+    GetOptions (
+        "help"       => \$help,
+        "domain=s"   => \$domain,
+        "include-aliases" => \$include_aliases,
+        "page=i"     => \$page,
+        "pagesize=i" => \$pagesize,
+    ) or do {
+        $help = 1;
+    };
+    pod2usage(
+        -sections => "COMMANDS/list-users",
+        -verbose  => 99
+    ) if $help;
+    pod2usage(
+        -msg => "Must specify --domain",
+        -sections => "COMMANDS/list-users",
+        -verbose  => 99
+    ) if !defined($domain);
+
+    my $path = "/domains/$domain/users";
+    my %params;
+    my $response = $client->request(path => $path, params => \%params );
+    print $response->status() if $verbose;
+
+    for my $user (@{$response->json()->{results}}) {
+        printf("%s\n",$user->{user_email});
+        if ( $include_aliases ) {
+            for my $alias (@{$user->{user_aliases}}) {
+                printf("  (%s)\n",$alias);
+            }
+        }
+    }
+}
+
+=head2 add-user
+
+mxg add-user <user_email>
+
+=cut
+
+sub add_user {
+    my $help = 0;
+
+    GetOptions (
+        "help"       => \$help,
+    ) or do {
+        $help = 1;
+    };
+    pod2usage(
+        -sections => "COMMANDS/add-user",
+        -verbose  => 99
+    ) if $help;
+
+    my $user_email = shift(@ARGV);
+    pod2usage(
+        -msg => "Please specify a valid email address",
+        -sections => "COMMANDS/add-user",
+        -verbose  => 99
+    ) if !defined($user_email) or !MXG::Utils->validateEmail($user_email);
+
+    my $domain = MXG::Utils->getDomainFromEmail($user_email);
+
+    my $path = "/domains/$domain/users";
+    my $data = { user_email => $user_email };
+    my $response = $client->request(method => 'POST', path => $path, data => $data );
+    print $response->status();
+
+}
+
+=head2 remove-user
+
+mxg remove-user <user_email>
+
+=cut
+
+sub remove_user {
+    my $help = 0;
+
+    GetOptions (
+        "help"       => \$help,
+    ) or do {
+        $help = 1;
+    };
+    pod2usage(
+        -sections => "COMMANDS/remove-user",
+        -verbose  => 99
+    ) if $help;
+
+    my $user_email = shift(@ARGV);
+    pod2usage(
+        -msg => "Please specify a valid email address",
+        -sections => "COMMANDS/remove-user",
+        -verbose  => 99
+    ) if !defined($user_email) or !MXG::Utils->validateEmail($user_email);
+
+    my $path = "/users/$user_email";
+    my $response = $client->request(method => 'DELETE', path => $path );
+    print $response->status();
+
+}
+
+package MXG::Utils;
+use strict;
+use warnings FATAL => 'all';
+
+sub getDomainFromEmail {
+    my ($self,$email) = @_;
+    my ($localpart,$domain) = split('@',$email);
+    lc($domain);
+}
+
+sub validateEmail {
+    my ($self,$email) = @_;
+    $email =~ /^([a-zA-Z0-9\+\_\=\.\-])+@([a-zA-Z0-9\-])+(\.[a-zA-Z0-9\-]+)+$/;
+}
+
+1;
+
 package MXG::API::Client;
 use strict;
 use warnings FATAL => 'all';
 use LWP;
+use JSON;
 
 sub new {
     my ($class,$endpoint,$api_key) = @_;
@@ -180,6 +320,7 @@ sub request {
     );
 
     $args{path} =~ s/^\///;  # remove leading slash from path
+    $args{data} = JSON::to_json($args{data}) if ref($args{data});
 
     my $uri = URI->new($self->{endpoint}.'/'.$args{path} );
     $uri->query_form($args{params});
@@ -187,9 +328,11 @@ sub request {
     my %headers = %{$args{headers}};
 
     $headers{Authorization} = 'Bearer '.$self->{api_key};
+    $headers{'Content-Type'} = 'application/json';
     $headers{'Accept'} = 'application/json';
 
-    print $uri->as_string,"\n" if $verbose;
+    print $args{method}.' '.$uri->as_string,"\n" if $verbose;
+    print $args{data},"\n" if $verbose and $args{data};
     my $request = HTTP::Request->new(
         $args{method},
         $uri->as_string,
@@ -197,8 +340,11 @@ sub request {
         $args{data}
     );
 
-    bless $self->{ua}->request($request), 'MXG::API::Response';
+    #@type MXG::API::Response
+    my $response = bless $self->{ua}->request($request), 'MXG::API::Response';
+    die $response->status() unless $response->is_success();
 
+    return $response;
 }
 
 1;
@@ -212,6 +358,10 @@ use parent 'HTTP::Response';
 
 sub json {
     JSON::from_json(shift->content());
+}
+
+sub status {
+    shift->status_line."\n";
 }
 
 
