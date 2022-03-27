@@ -1,53 +1,110 @@
 #!/usr/bin/perl
+#
+# MXGuardian Command Line Interface
+# https://www.mxguardian.net
+#
+#
 use strict;
 use warnings FATAL => 'all';
 use File::Basename;
-use Getopt::Long;
+use Getopt::Long qw(:config require_order);
+use Pod::Usage;
 
-my $prog = basename($0);
+=head1 NAME
+
+Command Line Interface to MXGuardian
+
+=head1 VERSION
+
+0.1.0
+
+=head1 SYNOPSIS
+
+mxg [options] <command> [parameters]
+
+To see help text, you can run:
+
+    mxg -h
+    mxg <command> -h
+
+Options:
+
+    -h       help
+    -v       verbose
+
+=head1 COMMANDS
+
+=cut
+
+my $help = 0;
+my $verbose = 0;
+GetOptions(
+    'help|?' => \$help,
+    verbose => \$verbose
+) or pod2usage(2);
+pod2usage(1) if $help;
+
 my $command = shift;
-usage("the following arguments are required: command") unless defined($command);
+pod2usage("The following arguments are required: command") unless defined($command);
 
+pod2usage("Missing required environment variable: MXG_API_KEY") unless defined($ENV{MXG_API_KEY});
 my $client = MXG::API::Client->new(
     $ENV{MXG_API_ENDPOINT} || 'https://secure.mxguardian.net/api/v1',
     $ENV{MXG_API_KEY}
 );
 
-if ( $command eq 'search' ) {
-    search();
+if ( $command eq 'search-inbound' ) {
+    search('inbound');
+} elsif ( $command eq 'search-outbound' ) {
+    search('outbound');
+} else {
+    pod2usage("Unknown command: $command");
 }
 
-sub usage {
-    my $error = shift;
-    my $msg = <<EOF;
+=head2 B<search-inbound>
 
-usage: $prog [options] <command> <subcommand> [<subcommand> ...] [parameters]
-To see help text, you can run:
+mxg search-inbound [options] [search phrase]
 
-  $prog help
-  $prog <command> help
-  $prog <command> <subcommand> help
+ Options:
+   --domain <value> | --user <value>
+   [--columns <value>]
+   [--page <value]
+   [-pagesize <value>]
 
-EOF
+ Default column names:
+   mail_id,date,author,subject
 
-    $msg .= "$prog: error: $error\n\n" if defined($error);
-    die($msg);
-}
+ Additional column names (may be specified with --columns)
+   sender,from,score,ip
+
+=head2 B<search-outbound>
+
+See search-inbound for details
+
+=cut
 
 sub search {
+    my $mode = shift;
     my $columns = "mail_id,date,author,subject";
-    my $pagesize = 100;
     my $page = 1;
-    my $outbound = 0;
+    my $pagesize = 100;
+    my $help = 0;
     my ($domain,$user);
 
     GetOptions (
-        "pagesize=i" => \$pagesize,
+        "help"       => \$help,
+        "domain=s"   => \$domain,
+        "user=s"     => \$user,
         "columns=s"  => \$columns,
-        "outbound"   => \$outbound,
-        "domain=s"     => \$domain,
-        "user=s"       => \$user
-    ) or usage();
+        "page=i"     => \$page,
+        "pagesize=i" => \$pagesize,
+    ) or do {
+        $help = 1;
+    };
+    pod2usage(
+        -sections => "COMMANDS/search",
+        -verbose  => 99
+    ) if $help;
 
     my %params = (
         page     => $page,
@@ -56,19 +113,22 @@ sub search {
     $params{q} = shift(@ARGV) if @ARGV;
 
     my $path;
-    my $mode = $outbound ? 'outbound' : 'inbound';
     if ( defined($domain) ) {
         $path = "domains/$domain/$mode";
     } elsif ( defined($user) ) {
         $path = "users/$user/$mode";
     } else {
-        usage("domain name or user email address is required");
+        pod2usage(
+            -msg      => "Must specify --domain or --user",
+            -sections => [ qw(COMMANDS/search-inbound COMMANDS/search-outbound) ],
+            -verbose  => 99
+        );
     }
 
     #@type MXG::API::Response;
     my $response = $client->request(path => $path, params => \%params );
-    print $response->status_line;
     die $response->status_line()."\n" unless $response->is_success();
+    print $response->status_line,"\n" if $verbose;
 
     my @columns = split(',',$columns);
     for my $msg (@{$response->json()}) {
@@ -129,7 +189,7 @@ sub request {
     $headers{Authorization} = 'Bearer '.$self->{api_key};
     $headers{'Accept'} = 'application/json';
 
-    print $uri->as_string,"\n";
+    print $uri->as_string,"\n" if $verbose;
     my $request = HTTP::Request->new(
         $args{method},
         $uri->as_string,
