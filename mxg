@@ -11,50 +11,49 @@ use Getopt::Long qw(:config require_order);
 use Pod::Usage;
 
 my $verbose = 0;
-
-GetOptions(
-    help => sub { pod2usage(1) },
-    verbose => \$verbose
-) or pod2usage(2);
-
-my $command = shift;
-pod2usage("The following arguments are required: command") unless defined($command);
-
-pod2usage("Missing required environment variable: MXG_API_KEY") unless defined($ENV{MXG_API_KEY});
-my $client = MXG::API::Client->new(
-    $ENV{MXG_API_ENDPOINT} || 'https://secure.mxguardian.net/api/v1',
-    $ENV{MXG_API_KEY}
+my $api_endpoint = $ENV{MXG_API_ENDPOINT} || 'https://secure.mxguardian.net/api/v1';
+my $api_key = $ENV{MXG_API_KEY};
+my %dispatch = (
+    'domain-list'     => \&domain_list,
+    'domain-add'      => \&domain_add,
+    'domain-delete'   => \&domain_delete,
+    'user-list'       => \&user_list,
+    'user-add'        => \&user_add,
+    'user-delete'     => \&user_delete,
+    'search-inbound'  => sub {search("inbound")},
+    'search-outbound' => sub {search("outbound")},
 );
 
-Getopt::Long::Configure("no_require_order");
+GetOptions(
+    'help'       => sub {pod2usage(1)},
+    'key=s'      => \$api_key,
+    'endpoint=s' => \$api_endpoint,
+    'verbose'    => \$verbose
+) or pod2usage(2);
+my $command = shift;
 
-if ( $command eq 'search-inbound' ) {
-    search('inbound');
-} elsif ( $command eq 'search-outbound' ) {
-    search('outbound');
-} elsif ( $command eq 'domain-list' ) {
-    domain_list();
-} elsif ( $command eq 'domain-add' ) {
-    domain_add();
-} elsif ( $command eq 'domain-delete' ) {
-    domain_delete();
-} elsif ( $command eq 'user-list' ) {
-    user_list();
-} elsif ( $command eq 'user-add' ) {
-    user_add();
-} elsif ( $command eq 'user-delete' ) {
-    user_delete();
+pod2usage("The following arguments are required: command") unless defined($command);
+pod2usage("<api_key> must be specified via --key or the MXG_API_KEY environment variable") unless defined($api_key);
+
+my $client = MXG::API::Client->new(
+    $api_endpoint,
+    $api_key
+);
+
+# Dispatch to command module
+if ( defined($dispatch{$command}) ) {
+    Getopt::Long::Configure("no_require_order");
+    $dispatch{$command}->();
 } else {
     pod2usage("Unknown command: $command");
 }
 
+#
+# End of main program
+#
+
 sub search {
     my $mode = shift;
-    my $columns = "mail_id,date,author,subject";
-    my $page = 1;
-    my $pagesize = 100;
-    my $filter;
-
     my $usage = sub {
         pod2usage(
             -msg => shift,
@@ -63,6 +62,11 @@ sub search {
         );
     };
 
+    # Get options
+    my $columns = "mail_id,date,author,subject";
+    my $page = 1;
+    my $pagesize = 100;
+    my $filter;
     GetOptions (
         "help"       => sub { $usage->() } ,
         "filter=s"   => \$filter,
@@ -70,26 +74,26 @@ sub search {
         "page=i"     => \$page,
         "pagesize=i" => \$pagesize,
     ) or $usage->();
+    my ($target) = @ARGV;
 
+    # Validate options
+    $usage->("Domain name or user email address is required") unless defined($target);
+
+    # Build request parameters
     my %params = (
         page     => $page,
         pagesize => $pagesize,
     );
-    $params{q} = $filter if defined($filter);
+    $params{filter} = $filter if defined($filter);
 
-    my $target = shift(@ARGV);
-    $usage->("Domain name or user email address is required") unless defined($target);
-
-    my $path;
-    if ( MXG::Utils->validateEmail($target) ) {
-        $path = "users/$target/$mode";
-    } else {
-        $path = "domains/$target/$mode";
-    }
-
-    my $response = $client->request(path => $path, params => \%params );
+    # Submit request
+    my $response = $client->request(
+        path => MXG::Utils->validateEmail($target) ? "users/$target/$mode" : "domains/$target/$mode",
+        params => \%params
+    );
     print $response->status() if $verbose;
 
+    # Display results
     my @columns = split(',',$columns);
     for my $msg (@{$response->json()}) {
         for (@columns) {
@@ -112,8 +116,6 @@ sub search {
 }
 
 sub domain_list {
-    my $filter;
-    my $include_aliases = 0;
     my $usage = sub {
         pod2usage(
             -msg => shift,
@@ -122,17 +124,21 @@ sub domain_list {
         );
     };
 
+    my $filter;
+    my $include_aliases = 0;
     GetOptions (
         "help"            => sub { $usage->() },
         "filter=s"        => \$filter,
         "include-aliases" => \$include_aliases,
     ) or $usage->();
 
-    my $path = "/domains";
     my %params;
     $params{filter} = $filter if defined($filter);
 
-    my $response = $client->request(path => $path, params => \%params );
+    my $response = $client->request(
+        path => "/domains",
+        params => \%params
+    );
     print $response->status() if $verbose;
 
     for my $domain (@{$response->json()->{results}}) {
@@ -162,12 +168,14 @@ sub domain_add {
     $usage->("<domain_name> is required") unless defined($domain_name);
     $usage->("<mail_server> is required") unless defined($mailserver);
 
-    my $path = "/domains";
-    my $data = {
-        domain_name       => $domain_name,
-        domain_mailserver => $mailserver,
-    };
-    my $response = $client->request(method => 'POST', path => $path, data => $data );
+    my $response = $client->request(
+        method => 'POST',
+        path => "/domains",
+        data => {
+            domain_name       => $domain_name,
+            domain_mailserver => $mailserver,
+        }
+    );
     print $response->status();
 
 }
@@ -195,7 +203,6 @@ sub domain_delete {
 }
 
 sub user_list {
-    my $include_aliases = 0;
     my $usage = sub {
         pod2usage(
             -msg => shift,
@@ -204,17 +211,18 @@ sub user_list {
         );
     };
 
+    my $include_aliases = 0;
     GetOptions (
         "help"       => sub { $usage->() },
         "include-aliases" => \$include_aliases,
     ) or $usage->();
-
     my $domain = shift(@ARGV);
+
     $usage->("<domain_name> is required") unless defined($domain);
 
-    my $path = "/domains/$domain/users";
-    my %params;
-    my $response = $client->request(path => $path, params => \%params );
+    my $response = $client->request(
+        path => "/domains/$domain/users",
+    );
     print $response->status() if $verbose;
 
     for my $user (@{$response->json()->{results}}) {
@@ -239,16 +247,20 @@ sub user_add {
     GetOptions (
         "help"       => sub { $usage->() },
     ) or $usage->();
-
     my $user_email = shift(@ARGV);
+
     $usage->("<user_email> is required") unless defined($user_email);
     $usage->("Please specify a valid email address") unless MXG::Utils->validateEmail($user_email);
 
     my $domain = MXG::Utils->getDomainFromEmail($user_email);
 
-    my $path = "/domains/$domain/users";
-    my $data = { user_email => $user_email };
-    my $response = $client->request(method => 'POST', path => $path, data => $data );
+    my $response = $client->request(
+        method => 'POST',
+        path => "/domains/$domain/users",
+        data => {
+            user_email => $user_email
+        }
+    );
     print $response->status();
 
 }
@@ -265,13 +277,15 @@ sub user_delete {
     GetOptions (
         "help"       => sub { $usage->() },
     ) or $usage->();
-
     my $user_email = shift(@ARGV);
+
     $usage->("<user_email> is required") unless defined($user_email);
     $usage->("Please specify a valid email address") unless MXG::Utils->validateEmail($user_email);
 
-    my $path = "/users/$user_email";
-    my $response = $client->request(method => 'DELETE', path => $path );
+    my $response = $client->request(
+        method => 'DELETE',
+        path   => "/users/$user_email"
+    );
     print $response->status();
 
 }
@@ -383,7 +397,7 @@ Command Line Interface to MXGuardian
 
 =head1 SYNOPSIS
 
-mxg [options] <command> [parameters]
+mxg [options] <command> [command-options] [command-parameters]
 
 To see help text, you can run:
 
@@ -392,7 +406,10 @@ To see help text, you can run:
 
 Options:
 
-    -v       verbose
+    [-h|--help]
+    [-v|--verbose]
+    [-k|--key <api_key>]
+    [-e|--endpoint <api_endpoint>]
 
 =head1 DESCRIPTION
 
