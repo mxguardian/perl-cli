@@ -10,39 +10,12 @@ use File::Basename;
 use Getopt::Long qw(:config require_order);
 use Pod::Usage;
 
-=head1 NAME
-
-Command Line Interface to MXGuardian
-
-=head1 VERSION
-
-0.1.0
-
-=head1 SYNOPSIS
-
-mxg [options] <command> [parameters]
-
-To see help text, you can run:
-
-    mxg -h
-    mxg <command> -h
-
-Options:
-
-    -h       help
-    -v       verbose
-
-=head1 COMMANDS
-
-=cut
-
-my $_help = 0;
 my $verbose = 0;
+
 GetOptions(
-    'help|?' => \$_help,
+    help => sub { pod2usage(1) },
     verbose => \$verbose
 ) or pod2usage(2);
-pod2usage(1) if $_help;
 
 my $command = shift;
 pod2usage("The following arguments are required: command") unless defined($command);
@@ -53,82 +26,61 @@ my $client = MXG::API::Client->new(
     $ENV{MXG_API_KEY}
 );
 
-if ( $command eq 'search-inbound' ) {
+Getopt::Long::Configure("no_require_order");
+
+if ( $command eq 'search:inbound' ) {
     search('inbound');
-} elsif ( $command eq 'search-outbound' ) {
+} elsif ( $command eq 'search:outbound' ) {
     search('outbound');
-} elsif ( $command eq 'list-users' ) {
-    list_users();
-} elsif ( $command eq 'add-user' ) {
-    add_user();
-} elsif ( $command eq 'remove-user' ) {
-    remove_user();
+} elsif ( $command eq 'domain:list' ) {
+    domain_list();
+} elsif ( $command eq 'user:list' ) {
+    user_list();
+} elsif ( $command eq 'user:add' ) {
+    user_add();
+} elsif ( $command eq 'user:delete' ) {
+    user_delete();
 } else {
     pod2usage("Unknown command: $command");
 }
-
-=head2 B<search-inbound>
-
-mxg search-inbound [options] [search phrase]
-
- Options:
-   --domain <value> | --user <value>
-   [--columns <value>]
-   [--page <value]
-   [-pagesize <value>]
-
- Default column names:
-   mail_id,date,author,subject
-
- Additional column names (may be specified with --columns)
-   sender,from,score,ip
-
-=head2 B<search-outbound>
-
-See search-inbound for details
-
-=cut
 
 sub search {
     my $mode = shift;
     my $columns = "mail_id,date,author,subject";
     my $page = 1;
     my $pagesize = 100;
-    my $help = 0;
-    my ($domain,$user);
+    my $filter;
+
+    my $usage = sub {
+        pod2usage(
+            -msg => shift,
+            -sections => [ qw(COMMANDS/search:inbound COMMANDS/search:outbound) ],
+            -verbose  => 99
+        );
+    };
 
     GetOptions (
-        "help"       => \$help,
-        "domain=s"   => \$domain,
-        "user=s"     => \$user,
+        "help"       => sub { $usage->() } ,
+        "filter=s"   => \$filter,
         "columns=s"  => \$columns,
         "page=i"     => \$page,
         "pagesize=i" => \$pagesize,
-    ) or do {
-        $help = 1;
-    };
-    pod2usage(
-        -sections => "COMMANDS/search",
-        -verbose  => 99
-    ) if $help;
+    ) or $usage->();
 
     my %params = (
         page     => $page,
         pagesize => $pagesize,
     );
-    $params{q} = shift(@ARGV) if @ARGV;
+    $params{q} = $filter if defined($filter);
+
+    my $target = shift(@ARGV);
+    $usage->("Domain name or user email address is required") unless defined($target);
 
     my $path;
-    if ( defined($domain) ) {
-        $path = "domains/$domain/$mode";
-    } elsif ( defined($user) ) {
-        $path = "users/$user/$mode";
+    if ( MXG::Utils->validateEmail($target) ) {
+        $path = "users/$target/$mode";
     } else {
-        pod2usage(
-            -msg      => "Must specify --domain or --user",
-            -sections => [ qw(COMMANDS/search-inbound COMMANDS/search-outbound) ],
-            -verbose  => 99
-        );
+        $path = "domains/$target/$mode";
     }
 
     my $response = $client->request(path => $path, params => \%params );
@@ -155,41 +107,57 @@ sub search {
     }
 }
 
-=head2 list-users
-
-mxg list-users [options]
-
- Options:
-   --domain <value>
-   [--include-aliases]
-
-=cut
-
-sub list_users {
-    my $page = 1;
-    my $pagesize = 100;
-    my $help = 0;
+sub domain_list {
+    my $filter;
     my $include_aliases = 0;
-    my $domain;
+    my $usage = sub {
+        pod2usage(
+            -msg => shift,
+            -sections => "COMMANDS/domain:list",
+            -verbose  => 99
+        );
+    };
 
     GetOptions (
-        "help"       => \$help,
-        "domain=s"   => \$domain,
+        "help"            => sub { $usage->() },
+        "filter=s"        => \$filter,
         "include-aliases" => \$include_aliases,
-        "page=i"     => \$page,
-        "pagesize=i" => \$pagesize,
-    ) or do {
-        $help = 1;
+    ) or $usage->();
+
+    my $path = "/domains";
+    my %params;
+    $params{filter} = $filter if defined($filter);
+
+    my $response = $client->request(path => $path, params => \%params );
+    print $response->status() if $verbose;
+
+    for my $domain (@{$response->json()->{results}}) {
+        printf("%s\n",$domain->{domain_name});
+        if ( $include_aliases ) {
+            for my $alias (@{$domain->{domain_aliases}}) {
+                printf("  -> %s\n",$alias);
+            }
+        }
+    }
+}
+
+sub user_list {
+    my $include_aliases = 0;
+    my $usage = sub {
+        pod2usage(
+            -msg => shift,
+            -sections => "COMMANDS/user:list",
+            -verbose  => 99
+        );
     };
-    pod2usage(
-        -sections => "COMMANDS/list-users",
-        -verbose  => 99
-    ) if $help;
-    pod2usage(
-        -msg => "Must specify --domain",
-        -sections => "COMMANDS/list-users",
-        -verbose  => 99
-    ) if !defined($domain);
+
+    GetOptions (
+        "help"       => sub { $usage->() },
+        "include-aliases" => \$include_aliases,
+    ) or $usage->();
+
+    my $domain = shift(@ARGV);
+    $usage->("Domain name is required") unless defined($domain);
 
     my $path = "/domains/$domain/users";
     my %params;
@@ -200,37 +168,28 @@ sub list_users {
         printf("%s\n",$user->{user_email});
         if ( $include_aliases ) {
             for my $alias (@{$user->{user_aliases}}) {
-                printf("  (%s)\n",$alias);
+                printf("  -> %s\n",$alias);
             }
         }
     }
 }
 
-=head2 add-user
-
-mxg add-user <user_email>
-
-=cut
-
-sub add_user {
-    my $help = 0;
+sub user_add {
+    my $usage = sub {
+        pod2usage(
+            -msg => shift,
+            -sections => "COMMANDS/user:add",
+            -verbose  => 99
+        );
+    };
 
     GetOptions (
-        "help"       => \$help,
-    ) or do {
-        $help = 1;
-    };
-    pod2usage(
-        -sections => "COMMANDS/add-user",
-        -verbose  => 99
-    ) if $help;
+        "help"       => sub { $usage->() },
+    ) or $usage->();
 
     my $user_email = shift(@ARGV);
-    pod2usage(
-        -msg => "Please specify a valid email address",
-        -sections => "COMMANDS/add-user",
-        -verbose  => 99
-    ) if !defined($user_email) or !MXG::Utils->validateEmail($user_email);
+    $usage->("Please specify a valid email address")
+        unless defined($user_email) and MXG::Utils->validateEmail($user_email);
 
     my $domain = MXG::Utils->getDomainFromEmail($user_email);
 
@@ -241,31 +200,22 @@ sub add_user {
 
 }
 
-=head2 remove-user
-
-mxg remove-user <user_email>
-
-=cut
-
-sub remove_user {
-    my $help = 0;
+sub user_delete {
+    my $usage = sub {
+        pod2usage(
+            -msg => shift,
+            -sections => "COMMANDS/user:delete",
+            -verbose  => 99
+        );
+    };
 
     GetOptions (
-        "help"       => \$help,
-    ) or do {
-        $help = 1;
-    };
-    pod2usage(
-        -sections => "COMMANDS/remove-user",
-        -verbose  => 99
-    ) if $help;
+        "help"       => sub { $usage->() },
+    ) or $usage->();
 
     my $user_email = shift(@ARGV);
-    pod2usage(
-        -msg => "Please specify a valid email address",
-        -sections => "COMMANDS/remove-user",
-        -verbose  => 99
-    ) if !defined($user_email) or !MXG::Utils->validateEmail($user_email);
+    $usage->("Please specify a valid email address")
+        unless defined($user_email) and MXG::Utils->validateEmail($user_email);
 
     my $path = "/users/$user_email";
     my $response = $client->request(method => 'DELETE', path => $path );
@@ -361,8 +311,105 @@ sub json {
 }
 
 sub status {
-    shift->status_line."\n";
+    shift->status_line()."\n";
 }
 
 
 1;
+
+__END__
+
+
+=head1 NAME
+
+Command Line Interface to MXGuardian
+
+=head1 VERSION
+
+0.1.0
+
+=head1 SYNOPSIS
+
+mxg [options] <command> [parameters]
+
+To see help text, you can run:
+
+    mxg -h
+    mxg <command> -h
+
+Options:
+
+    -v       verbose
+
+=head1 DESCRIPTION
+
+Commands available:
+
+    domain:list
+    domain:add
+    domain:delete
+    domain:modify
+    user:list
+    user:add
+    user:delete
+    user:modify
+    search:inbound
+    search:outbound
+
+=head1 COMMANDS
+
+=cut
+
+=head2 B<search:inbound>
+
+mxg search:inbound [options] [search phrase]
+
+ Options:
+   --domain <value> | --user <value>
+   [--columns <value>]
+   [--page <value]
+   [-pagesize <value>]
+
+ Default column names:
+   mail_id,date,author,subject
+
+ Additional column names (may be specified with --columns)
+   sender,from,score,ip
+
+=head2 B<search:outbound>
+
+See search:inbound for details
+
+=cut
+
+=head2 domain:list
+
+mxg domain:list [options]
+
+ Options:
+   [--include-aliases]
+
+=cut
+
+=head2 user:list
+
+mxg user:list [options] <domain_name>
+
+ Options:
+   [--include-aliases]
+
+=cut
+
+=head2 user:add
+
+mxg user:add <user_email>
+
+=cut
+
+=head2 user:delete
+
+mxg user:delete <user_email>
+
+=cut
+
+
