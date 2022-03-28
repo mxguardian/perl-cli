@@ -28,17 +28,21 @@ my $client = MXG::API::Client->new(
 
 Getopt::Long::Configure("no_require_order");
 
-if ( $command eq 'search:inbound' ) {
+if ( $command eq 'search-inbound' ) {
     search('inbound');
-} elsif ( $command eq 'search:outbound' ) {
+} elsif ( $command eq 'search-outbound' ) {
     search('outbound');
-} elsif ( $command eq 'domain:list' ) {
+} elsif ( $command eq 'domain-list' ) {
     domain_list();
-} elsif ( $command eq 'user:list' ) {
+} elsif ( $command eq 'domain-add' ) {
+    domain_add();
+} elsif ( $command eq 'domain-delete' ) {
+    domain_delete();
+} elsif ( $command eq 'user-list' ) {
     user_list();
-} elsif ( $command eq 'user:add' ) {
+} elsif ( $command eq 'user-add' ) {
     user_add();
-} elsif ( $command eq 'user:delete' ) {
+} elsif ( $command eq 'user-delete' ) {
     user_delete();
 } else {
     pod2usage("Unknown command: $command");
@@ -54,7 +58,7 @@ sub search {
     my $usage = sub {
         pod2usage(
             -msg => shift,
-            -sections => [ qw(COMMANDS/search:inbound COMMANDS/search:outbound) ],
+            -sections => [ qw(COMMANDS/search-inbound COMMANDS/search-outbound) ],
             -verbose  => 99
         );
     };
@@ -113,7 +117,7 @@ sub domain_list {
     my $usage = sub {
         pod2usage(
             -msg => shift,
-            -sections => "COMMANDS/domain:list",
+            -sections => "COMMANDS/domain-list",
             -verbose  => 99
         );
     };
@@ -141,12 +145,61 @@ sub domain_list {
     }
 }
 
+sub domain_add {
+    my $usage = sub {
+        pod2usage(
+            -msg => shift,
+            -sections => "COMMANDS/domain-add",
+            -verbose  => 99
+        );
+    };
+
+    GetOptions (
+        "help"       => sub {$usage->()},
+    ) or $usage->();
+    my ($domain_name,$mailserver) = @ARGV;
+
+    $usage->("<domain_name> is required") unless defined($domain_name);
+    $usage->("<mail_server> is required") unless defined($mailserver);
+
+    my $path = "/domains";
+    my $data = {
+        domain_name       => $domain_name,
+        domain_mailserver => $mailserver,
+    };
+    my $response = $client->request(method => 'POST', path => $path, data => $data );
+    print $response->status();
+
+}
+
+sub domain_delete {
+    my $usage = sub {
+        pod2usage(
+            -msg => shift,
+            -sections => "COMMANDS/domain-delete",
+            -verbose  => 99
+        );
+    };
+
+    GetOptions (
+        "help"       => sub { $usage->() },
+    ) or $usage->();
+    my $domain_name = shift(@ARGV);
+
+    $usage->("<domain_name> is required") unless defined($domain_name);
+
+    my $path = "/domains/$domain_name";
+    my $response = $client->request(method => 'DELETE', path => $path );
+    print $response->status();
+
+}
+
 sub user_list {
     my $include_aliases = 0;
     my $usage = sub {
         pod2usage(
             -msg => shift,
-            -sections => "COMMANDS/user:list",
+            -sections => "COMMANDS/user-list",
             -verbose  => 99
         );
     };
@@ -157,7 +210,7 @@ sub user_list {
     ) or $usage->();
 
     my $domain = shift(@ARGV);
-    $usage->("Domain name is required") unless defined($domain);
+    $usage->("<domain_name> is required") unless defined($domain);
 
     my $path = "/domains/$domain/users";
     my %params;
@@ -178,7 +231,7 @@ sub user_add {
     my $usage = sub {
         pod2usage(
             -msg => shift,
-            -sections => "COMMANDS/user:add",
+            -sections => "COMMANDS/user-add",
             -verbose  => 99
         );
     };
@@ -188,8 +241,8 @@ sub user_add {
     ) or $usage->();
 
     my $user_email = shift(@ARGV);
-    $usage->("Please specify a valid email address")
-        unless defined($user_email) and MXG::Utils->validateEmail($user_email);
+    $usage->("<user_email> is required") unless defined($user_email);
+    $usage->("Please specify a valid email address") unless MXG::Utils->validateEmail($user_email);
 
     my $domain = MXG::Utils->getDomainFromEmail($user_email);
 
@@ -204,7 +257,7 @@ sub user_delete {
     my $usage = sub {
         pod2usage(
             -msg => shift,
-            -sections => "COMMANDS/user:delete",
+            -sections => "COMMANDS/user-delete",
             -verbose  => 99
         );
     };
@@ -214,8 +267,8 @@ sub user_delete {
     ) or $usage->();
 
     my $user_email = shift(@ARGV);
-    $usage->("Please specify a valid email address")
-        unless defined($user_email) and MXG::Utils->validateEmail($user_email);
+    $usage->("<user_email> is required") unless defined($user_email);
+    $usage->("Please specify a valid email address") unless MXG::Utils->validateEmail($user_email);
 
     my $path = "/users/$user_email";
     my $response = $client->request(method => 'DELETE', path => $path );
@@ -345,24 +398,24 @@ Options:
 
 Commands available:
 
-    domain:list
-    domain:add
-    domain:delete
-    domain:modify
-    user:list
-    user:add
-    user:delete
-    user:modify
-    search:inbound
-    search:outbound
+    domain-list
+    domain-add
+    domain-delete
+    domain-modify
+    user-list
+    user-add
+    user-delete
+    user-modify
+    search-inbound
+    search-outbound
 
 =head1 COMMANDS
 
 =cut
 
-=head2 B<search:inbound>
+=head2 B<search-inbound>
 
-mxg search:inbound [options] [search phrase]
+mxg search-inbound [options] [search phrase]
 
  Options:
    --domain <value> | --user <value>
@@ -376,39 +429,51 @@ mxg search:inbound [options] [search phrase]
  Additional column names (may be specified with --columns)
    sender,from,score,ip
 
-=head2 B<search:outbound>
+=head2 B<search-outbound>
 
-See search:inbound for details
+See search-inbound for details
 
 =cut
 
-=head2 domain:list
+=head2 domain-list
 
-mxg domain:list [options]
+mxg domain-list [options]
 
  Options:
    [--include-aliases]
 
 =cut
 
-=head2 user:list
+=head2 domain-add
 
-mxg user:list [options] <domain_name>
+mxg domain-add <domain_name> <mail_server>
+
+=cut
+
+=head2 domain-delete
+
+mxg domain-delete <domain_name>
+
+=cut
+
+=head2 user-list
+
+mxg user-list [options] <domain_name>
 
  Options:
    [--include-aliases]
 
 =cut
 
-=head2 user:add
+=head2 user-add
 
-mxg user:add <user_email>
+mxg user-add <user_email>
 
 =cut
 
-=head2 user:delete
+=head2 user-delete
 
-mxg user:delete <user_email>
+mxg user-delete <user_email>
 
 =cut
 
