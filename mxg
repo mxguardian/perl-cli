@@ -14,14 +14,20 @@ my $verbose = 0;
 my $api_endpoint = $ENV{MXG_API_ENDPOINT} || 'https://secure.mxguardian.net/api/v1';
 my $api_key = $ENV{MXG_API_KEY};
 my %dispatch = (
-    'domain-list'     => \&domain_list,
-    'domain-add'      => \&domain_add,
-    'domain-delete'   => \&domain_delete,
-    'user-list'       => \&user_list,
-    'user-add'        => \&user_add,
-    'user-delete'     => \&user_delete,
-    'search-inbound'  => sub {search("inbound")},
-    'search-outbound' => sub {search("outbound")},
+    'domain-list'      => \&domain_list,
+    'domain-add'       => \&domain_add,
+    'domain-delete'    => \&domain_delete,
+    'user-list'        => \&user_list,
+    'user-add'         => \&user_add,
+    'user-delete'      => \&user_delete,
+    'allowlist'        => sub {list_get("allowlist")},
+    'blocklist'        => sub {list_get("blocklist")},
+    'allowlist-add'    => sub {list_add("allowlist")},
+    'blocklist-add'    => sub {list_add("blocklist")},
+    'allowlist-delete' => sub {list_delete("allowlist")},
+    'blocklist-delete' => sub {list_delete("blocklist")},
+    'search-inbound'   => sub {search("inbound")},
+    'search-outbound'  => sub {search("outbound")},
 );
 
 GetOptions(
@@ -72,7 +78,7 @@ sub search {
         "filter=s"   => \$filter,
         "columns=s"  => \$columns,
         "page=i"     => \$page,
-        "pagesize=i" => \$pagesize,
+        "s|pagesize=i" => \$pagesize,
     ) or $usage->();
     my ($target) = @ARGV;
 
@@ -290,6 +296,93 @@ sub user_delete {
 
 }
 
+sub list_get {
+    my $list = shift;
+    my $usage = sub {
+        pod2usage(
+            -msg => shift,
+            -sections => [ qw(COMMANDS/allowlist COMMANDS/blocklist) ],
+            -verbose  => 99
+        );
+    };
+
+    GetOptions (
+        "help"       => sub { $usage->() },
+    ) or $usage->();
+    my ($target) = @ARGV;
+
+    $usage->("<domain_or_email> is required") unless defined($target);
+
+    my $response = $client->request(
+        path => MXG::Utils->validateEmail($target) ? "/users/$target/$list" : "/domains/$target/$list",
+    );
+    print $response->status() if $verbose;
+
+    for my $item (@{$response->json()->{results}}) {
+        printf("%s\n",$item->{address});
+    }
+
+}
+
+sub list_add {
+    my $list = shift;
+    my $usage = sub {
+        pod2usage(
+            -msg => shift,
+            -sections => [ qw(COMMANDS/allowlist-add COMMANDS/blocklist-add) ],
+            -verbose  => 99
+        );
+    };
+
+    GetOptions (
+        "help"       => sub { $usage->() },
+    ) or $usage->();
+    my ($target,$address) = @ARGV;
+
+    $usage->("<domain_or_email> is required") unless defined($target);
+    $usage->("<address> is required") unless defined($address);
+
+    my $response = $client->request(
+        method => 'POST',
+        path   => MXG::Utils->validateEmail($target) ? "/users/$target/$list" : "/domains/$target/$list",
+        data   => {
+            address => $address
+        }
+    );
+    print $response->status() if $verbose;
+    print $response->status();
+
+
+}
+
+sub list_delete {
+    my $list = shift;
+    my $usage = sub {
+        pod2usage(
+            -msg => shift,
+            -sections => [ qw(COMMANDS/allowlist-delete COMMANDS/blocklist-delete) ],
+            -verbose  => 99
+        );
+    };
+
+    GetOptions (
+        "help"       => sub { $usage->() },
+    ) or $usage->();
+    my ($target,$address) = @ARGV;
+
+    $usage->("<domain_or_email> is required") unless defined($target);
+    $usage->("<address> is required") unless defined($address);
+
+    my $response = $client->request(
+        method => 'DELETE',
+        path   => MXG::Utils->validateEmail($target) ?
+            "/users/$target/$list/$address" :
+            "/domains/$target/$list/$address",
+    );
+    print $response->status();
+
+}
+
 package MXG::Utils;
 use strict;
 use warnings FATAL => 'all';
@@ -310,7 +403,8 @@ sub validateEmail {
 package MXG::API::Client;
 use strict;
 use warnings FATAL => 'all';
-use LWP;
+use Net::SSL;
+use LWP::UserAgent;
 use JSON;
 
 sub new {
@@ -320,6 +414,7 @@ sub new {
         endpoint => $endpoint,
         api_key  => $api_key,
         ua       => LWP::UserAgent->new(
+            # ssl_opts => { verify_hostname => 0 },
             timeout => 10
         )
     }, $class;
@@ -411,9 +506,7 @@ Options:
     [-k|--key <api_key>]
     [-e|--endpoint <api_endpoint>]
 
-=head1 DESCRIPTION
-
-Commands available:
+Commands:
 
     domain-list
     domain-add
@@ -425,32 +518,32 @@ Commands available:
     user-modify
     search-inbound
     search-outbound
+    allowlist
+    blocklist
+    allowlist-add
+    blocklist-add
+    allowlist-delete
+    blocklist-delete
 
 =head1 COMMANDS
 
-=cut
-
 =head2 B<search-inbound>
 
-mxg search-inbound [options] [search phrase]
+=head2 B<search-outbound>
+
+mxg search-inbound|search-outbound [options] <domain_or_user>
 
  Options:
-   --domain <value> | --user <value>
-   [--columns <value>]
-   [--page <value]
-   [-pagesize <value>]
+   [-f|--filter <expression>]
+   [-c|--columns <column_list>]
+   [-p|--page <value>]
+   [-s|--pagesize <value>]
 
  Default column names:
    mail_id,date,author,subject
 
  Additional column names (may be specified with --columns)
    sender,from,score,ip
-
-=head2 B<search-outbound>
-
-See search-inbound for details
-
-=cut
 
 =head2 domain-list
 
@@ -459,19 +552,13 @@ mxg domain-list [options]
  Options:
    [--include-aliases]
 
-=cut
-
 =head2 domain-add
 
 mxg domain-add <domain_name> <mail_server>
 
-=cut
-
 =head2 domain-delete
 
 mxg domain-delete <domain_name>
-
-=cut
 
 =head2 user-list
 
@@ -480,17 +567,39 @@ mxg user-list [options] <domain_name>
  Options:
    [--include-aliases]
 
-=cut
-
 =head2 user-add
 
 mxg user-add <user_email>
 
-=cut
-
 =head2 user-delete
 
 mxg user-delete <user_email>
+
+=head2 allowlist
+
+=head2 blocklist
+
+mxg allowlist|blocklist <domain_or_user>
+
+=head2 allowlist-add
+
+=head2 blocklist-add
+
+mxg allowlist-add|blocklist-add <domain_or_user> <address>
+
+ <address> can be one of the following:
+    Full email address (joe@example.com)
+    Domain name (@example.com)
+    Domain name including subdomains (@.example.com)
+    Top-level domain (@.xyz)
+    IP address (192.168.0.1)
+    CIDR Range (172.16.0.0/16)
+
+=head2 allowlist-delete
+
+=head2 blocklist-delete
+
+mxg allowlist-delete|blocklist-delete <domain_or_user> <address>
 
 =cut
 
