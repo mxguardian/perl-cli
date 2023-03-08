@@ -9,6 +9,8 @@ use warnings FATAL => 'all';
 use File::Basename;
 use Getopt::Long qw(:config require_order);
 use Pod::Usage;
+use MXG::API::Client;
+use MXG::Utils;
 
 my $verbose = 0;
 my $api_endpoint = $ENV{MXG_API_ENDPOINT} || 'https://secure.mxguardian.net/api/v1';
@@ -97,6 +99,7 @@ sub search {
         path => MXG::Utils->validateEmail($target) ? "users/$target/$mode" : "domains/$target/$mode",
         params => \%params
     );
+    die $response->status() unless $response->is_success();
     print $response->status() if $verbose;
 
     # Display results
@@ -145,6 +148,7 @@ sub domain_list {
         path => "/domains",
         params => \%params
     );
+    die $response->status() unless $response->is_success();
     print $response->status() if $verbose;
 
     for my $domain (@{$response->json()->{results}}) {
@@ -229,6 +233,7 @@ sub user_list {
     my $response = $client->request(
         path => "/domains/$domain/users",
     );
+    die $response->status() unless $response->is_success();
     print $response->status() if $verbose;
 
     for my $user (@{$response->json()->{results}}) {
@@ -316,6 +321,7 @@ sub list_get {
     my $response = $client->request(
         path => MXG::Utils->validateEmail($target) ? "/users/$target/$list" : "/domains/$target/$list",
     );
+    die $response->status() unless $response->is_success();
     print $response->status() if $verbose;
 
     for my $item (@{$response->json()->{results}}) {
@@ -349,7 +355,6 @@ sub list_add {
             address => $address
         }
     );
-    print $response->status() if $verbose;
     print $response->status();
 
 
@@ -383,101 +388,9 @@ sub list_delete {
 
 }
 
-package MXG::Utils;
-use strict;
-use warnings FATAL => 'all';
-
-sub getDomainFromEmail {
-    my ($self,$email) = @_;
-    my ($localpart,$domain) = split('@',$email);
-    lc($domain);
-}
-
-sub validateEmail {
-    my ($self,$email) = @_;
-    $email =~ /^([a-zA-Z0-9\+\_\=\.\-])+@([a-zA-Z0-9\-])+(\.[a-zA-Z0-9\-]+)+$/;
-}
-
 1;
 
-package MXG::API::Client;
-use strict;
-use warnings FATAL => 'all';
-use Net::SSL;
-use LWP::UserAgent;
-use JSON;
 
-sub new {
-    my ($class,$endpoint,$api_key) = @_;
-    $endpoint =~ s/\/$//; # remove trailing slash from endpoint
-    bless {
-        endpoint => $endpoint,
-        api_key  => $api_key,
-        ua       => LWP::UserAgent->new(
-            # ssl_opts => { verify_hostname => 0 },
-            timeout => 10
-        )
-    }, $class;
-}
-
-sub request {
-    my $self = shift;
-    my %args = (
-        method => 'GET',
-        path => '',
-        params => {},
-        headers => {},
-        data => '',
-        @_
-    );
-
-    $args{path} =~ s/^\///;  # remove leading slash from path
-    $args{data} = JSON::to_json($args{data}) if ref($args{data});
-
-    my $uri = URI->new($self->{endpoint}.'/'.$args{path} );
-    $uri->query_form($args{params});
-
-    my %headers = %{$args{headers}};
-
-    $headers{Authorization} = 'Bearer '.$self->{api_key};
-    $headers{'Content-Type'} = 'application/json';
-    $headers{'Accept'} = 'application/json';
-
-    print $args{method}.' '.$uri->as_string,"\n" if $verbose;
-    print $args{data},"\n" if $verbose and $args{data};
-    my $request = HTTP::Request->new(
-        $args{method},
-        $uri->as_string,
-        HTTP::Headers->new(%headers),
-        $args{data}
-    );
-
-    #@type MXG::API::Response
-    my $response = bless $self->{ua}->request($request), 'MXG::API::Response';
-    die $response->status() unless $response->is_success();
-
-    return $response;
-}
-
-1;
-
-package MXG::API::Response;
-use strict;
-use warnings FATAL => 'all';
-use JSON;
-
-use parent 'HTTP::Response';
-
-sub json {
-    JSON::from_json(shift->content());
-}
-
-sub status {
-    shift->status_line()."\n";
-}
-
-
-1;
 
 __END__
 
